@@ -876,6 +876,8 @@ void InitTitleNet() {
     //title entity cluster
     a = posix_memalign((void **)&(joint_model.et_mu), 128, (long long)kg_model.vocab_size * layer1_size * sizeof(real));
     if (joint_model.et_mu == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    for (a = 0; a < kg_model.vocab_size; a++) for (b = 0; b < layer1_size; b++)
+        joint_model.et_mu[a * layer1_size + b] = 0;
     
     //title entity cluster size
     joint_model.et_cluster_size = (int *)calloc(kg_model.vocab_size, sizeof(int));
@@ -887,6 +889,8 @@ void InitTitleNet() {
     //sense cluster center
     a = posix_memalign((void **)&(joint_model.mu), 128, (long long)joint_model.vocab_size * max_sense_num * layer1_size * sizeof(real));
     if (joint_model.mu == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    for (a = 0; a < joint_model.vocab_size; a++) for (b = 0; b < layer1_size; b++)
+        joint_model.mu[a * layer1_size + b] = 0;
     
     //sense cluster size
     joint_model.cluster_size = (int *)calloc(joint_model.vocab_size * max_sense_num, sizeof(int));
@@ -903,50 +907,9 @@ void InitTitleNet() {
         joint_model.syn0[a * max_sense_num * layer1_size + b * layer1_size + c] = (((next_random & 0xFFFF) / (real)65536) - 0.5) / layer1_size;
     }
 }
-/*
- int findMentionSense(long long mention_index, real *vec){
- int sense_index = -1, a, b, closest = -1, c_size;
- real dist = 0.0, closest_dist = -1.0, len_v, len_mu;
- if (mentions.vocab[mention_index].sense_num > 0){
- len_v = 0;
- for (a = 0; a < layer1_size; a++) len_v += vec[a] * vec[a];
- len_v = sqrt(len_v);
- for (a = 0; a < mentions.vocab[mention_index].sense_num; a++){
- c_size = mentions.cluster_size[mention_index*max_sense_num+a];
- if(c_size<=0)
- continue;
- len_mu = 0;
- for (b = 0; b < layer1_size; b++)
- len_mu += (mentions.mu[mention_index * max_sense_num * layer1_size + a * layer1_size + b]/c_size) * (mentions.mu[mention_index * max_sense_num * layer1_size + a * layer1_size + b]/c_size);
- len_mu = sqrt(len_mu);
- dist = 0;
- for (b = 0; b < layer1_size; b++)
- dist += (vec[b]/len_v) * (mentions.mu[mention_index * max_sense_num * layer1_size + a * layer1_size + b]/c_size/len_mu);
- if(dist > closest_dist){
- closest_dist = dist;
- closest = a;
- }
- }
- }
- if (closest_dist < cluster_threshold){
- if(mentions.vocab[mention_index].sense_num >= max_sense_num) return -1;
- //create new
- sense_index = mentions.vocab[mention_index].sense_num;
- mentions.vocab[mention_index].sense_num++;
- }
- else{
- sense_index = closest;
- }
- //update the cluster mu, and cluster_size
- mentions.cluster_size[mention_index*max_sense_num+sense_index] ++;
- for(b=0;b<layer1_size;b++)
- mentions.mu[mention_index * max_sense_num * layer1_size + sense_index * layer1_size + b] += vec[b];
- return sense_index;
- }
- */
 
 void *TrainTextModelThread(void *id) {
-    long long a, b, d, word=-1, last_word, sentence_length = 0, sentence_position = 0;
+    long long a, b, d, cw, word=-1, last_word, sentence_length = 0, sentence_position = 0;
     long long word_count = 0, anchor_count = 0, anchor_position=0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
     long long l1, l2, c, target, label = 0;
     unsigned long long next_random = (long long)id;
@@ -957,6 +920,8 @@ void *TrainTextModelThread(void *id) {
     clock_t now;
     real *neu1 = (real *)calloc(layer1_size, sizeof(real));
     real *neu1e = (real *)calloc(layer1_size, sizeof(real));
+    //context vector
+    real *tmp_context_vec = (real *)calloc(layer1_size, sizeof(real));
     struct anchor_item *anchors = (struct anchor_item *)calloc(MAX_SENTENCE_LENGTH, sizeof(struct anchor_item));
     FILE *fi = fopen(text_model.train_file, "rb");
     fseek(fi, text_model.file_size / (long long)num_threads * (long long)id, SEEK_SET);
@@ -1097,6 +1062,9 @@ void *TrainTextModelThread(void *id) {
                 for(anchor_position=0;anchor_position<anchor_count;anchor_position++){
                     for (c = 0; c < layer1_size; c++) neu1[c] = 0;
                     for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+                    //reset context vec
+                    for (c = 0; c < layer1_size; c++) tmp_context_vec[c] = 0;
+                    cw = 0;
                     next_random = next_random * (unsigned long long)25214903917 + 11;
                     b = next_random % window;
                     sentence_position = anchors[anchor_position].start_pos;
@@ -1112,6 +1080,9 @@ void *TrainTextModelThread(void *id) {
                             if (c >= sentence_length) continue;
                             last_word = sen[c];
                             if (last_word == -1) continue;
+                            // compute context vec
+                            for (c = 0; c < layer1_size; c++) tmp_context_vec[c] += text_model.syn0[last_word * layer1_size + c];
+                            cw ++;
                             for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
                             // NEGATIVE SAMPLING
                             if (negative > 0) for (d = 0; d < negative + 1; d++) {
@@ -1137,6 +1108,11 @@ void *TrainTextModelThread(void *id) {
                             // Learn weights input -> hidden
                             for (c = 0; c < layer1_size; c++) joint_model.et_syn0[c + l1] += neu1e[c];
                         }
+                    //update cluster center mu and cluster size
+                    if(cw>0){
+                        for (c = 0; c < layer1_size; c++) joint_model.et_mu[l1 + c] += (tmp_context_vec[c]/cw);
+                        joint_model.et_cluster_size[anchors[anchor_position].entity_index] += 1;
+                    }
                 }
             }
             
@@ -1375,6 +1351,8 @@ void *TrainJointModelThread(void *id) {
         for(anchor_position=0;anchor_position<anchor_count;anchor_position++){
             for (c = 0; c < layer1_size; c++) neu1[c] = 0;
             for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+            for (c = 0; c < layer1_size; c++) tmp_context_vec[c] = 0;
+            cw = 0;
             next_random = next_random * (unsigned long long)25214903917 + 11;
             b = next_random % window;
             sentence_position = anchors[anchor_position].start_pos;
@@ -1390,7 +1368,11 @@ void *TrainJointModelThread(void *id) {
                     if (c >= sentence_length) continue;
                     last_word = sen[c];
                     if (last_word == -1) continue;
+                    
                     l1 = last_word * layer1_size;
+                    // compute context vec
+                    for (c = 0; c < layer1_size; c++) tmp_context_vec[c] += text_model.syn0[l1 + c];
+                    cw ++;
                     for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
                     // NEGATIVE SAMPLING
                     if (negative > 0) for (d = 0; d < negative + 1; d++) {
@@ -1444,6 +1426,11 @@ void *TrainJointModelThread(void *id) {
             }
             // Learn weights input -> hidden
             for (c = 0; c < layer1_size; c++) joint_model.et_syn0[c + l1] += neu1e[c];
+            //update cluster center mu and cluster size
+            if(cw>0){
+                for (c = 0; c < layer1_size; c++) joint_model.et_mu[l1 + c] += (tmp_context_vec[c]/cw);
+                joint_model.et_cluster_size[anchors[anchor_position].entity_index] += 1;
+            }
         }
         
         sentence_length = 0;
@@ -1456,7 +1443,7 @@ void *TrainJointModelThread(void *id) {
 }
 
 void TrainTextModel(){
-    long a, b;
+    long a, b, c;
     pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
     real len;
     
@@ -1469,11 +1456,61 @@ void TrainTextModel(){
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     printf("Total anchors in train file: %lld\n", tmp_anchor_num);
     
-    //norm
-    len = 0;
-    for (b = 0; b < layer1_size; b++) len += text_model.syn0[b + a * layer1_size] * text_model.syn0[b + a * layer1_size];
-    len = sqrt(len);
-    for (b = 0; b < layer1_size; b++) text_model.syn0[b + a * layer1_size] /= len;
+    //norm embedding of words
+    for (a=0;a<text_model.vocab_size;a++){
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += text_model.syn0[b + a * layer1_size] * text_model.syn0[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) text_model.syn0[b + a * layer1_size] /= len;
+        //syn1neg
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += text_model.syn1neg[b + a * layer1_size] * text_model.syn1neg[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) text_model.syn1neg[b + a * layer1_size] /= len;
+    }
+    //reset the context cluster center
+    for (a = 0; a < joint_model.vocab_size; a++){
+        //entity cluster
+        for (b=0;b<joint_model.vocab[a].entity_num;b++){
+            //norm title entity vector
+            len = 0;
+            for (c = 0; c < layer1_size; c++) len += joint_model.et_syn0[joint_model.vocab[a].entity_index[b] * layer1_size + c] * joint_model.et_syn0[joint_model.vocab[a].entity_index[b] * layer1_size + c];
+            len = sqrt(len);
+            for (c = 0; c < layer1_size; c++) joint_model.et_syn0[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
+            
+            //reset cluster
+            if (joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]]>0){
+                for (c=0;c<layer1_size;c++)
+                    joint_model.et_mu[joint_model.vocab[a].entity_index[b]*layer1_size+c] /= joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]];
+                joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]] = 1;
+                //norm title entity cluster
+                len = 0;
+                for (c = 0; c < layer1_size; c++) len += joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] * joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c];
+                len = sqrt(len);
+                for (c = 0; c < layer1_size; c++) joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
+            }
+            
+        }
+        //NIL cluster
+        for (b=0;b<joint_model.vocab[a].sense_num;b++){
+            //norm for NIL sense vector
+            len = 0;
+            for (c = 0; c < layer1_size; c++) len += joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c];
+            len = sqrt(len);
+            for (c = 0; c < layer1_size; c++) joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
+            //reset cluster
+            if (joint_model.cluster_size[a*max_sense_num+b]>0){
+                for (c=0;c<layer1_size;c++)
+                    joint_model.mu[a*max_sense_num*layer1_size + b*layer1_size+c] /= joint_model.cluster_size[a*max_sense_num+b];
+                joint_model.cluster_size[a*max_sense_num+b] = 1;
+                //norm for NIL context center
+                len = 0;
+                for (c = 0; c < layer1_size; c++) len += joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c];
+                len = sqrt(len);
+                for (c = 0; c < layer1_size; c++) joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
+            }
+        }
+    }
 }
 
 void TrainKgModel(){
@@ -1489,10 +1526,17 @@ void TrainKgModel(){
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     
     //norm
-    len = 0;
-    for (b = 0; b < layer1_size; b++) len += kg_model.syn0[b + a * layer1_size] * kg_model.syn0[b + a * layer1_size];
-    len = sqrt(len);
-    for (b = 0; b < layer1_size; b++) kg_model.syn0[b + a * layer1_size] /= len;
+    for (a=0;a<kg_model.vocab_size;a++){
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += kg_model.syn0[b + a * layer1_size] * kg_model.syn0[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) kg_model.syn0[b + a * layer1_size] /= len;
+        //syn1neg
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += kg_model.syn1neg[b + a * layer1_size] * kg_model.syn1neg[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) kg_model.syn1neg[b + a * layer1_size] /= len;
+    }
 }
 
 void TrainJointModel() {
@@ -1518,17 +1562,18 @@ void TrainJointModel() {
             len = sqrt(len);
             for (c = 0; c < layer1_size; c++) joint_model.et_syn0[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
             
-            //norm title entity cluster
-            len = 0;
-            for (c = 0; c < layer1_size; c++) len += joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] * joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c];
-            len = sqrt(len);
-            for (c = 0; c < layer1_size; c++) joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
-            
+            //reset cluster
             if (joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]]>0){
                 for (c=0;c<layer1_size;c++)
                     joint_model.et_mu[joint_model.vocab[a].entity_index[b]*layer1_size+c] /= joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]];
                 joint_model.et_cluster_size[joint_model.vocab[a].entity_index[b]] = 1;
+                //norm title entity cluster
+                len = 0;
+                for (c = 0; c < layer1_size; c++) len += joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] * joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c];
+                len = sqrt(len);
+                for (c = 0; c < layer1_size; c++) joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
             }
+            
         }
         //NIL cluster
         for (b=0;b<joint_model.vocab[a].sense_num;b++){
@@ -1537,17 +1582,16 @@ void TrainJointModel() {
             for (c = 0; c < layer1_size; c++) len += joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c];
             len = sqrt(len);
             for (c = 0; c < layer1_size; c++) joint_model.syn0[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
-            
-            //norm for NIL context center
-            len = 0;
-            for (c = 0; c < layer1_size; c++) len += joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c];
-            len = sqrt(len);
-            for (c = 0; c < layer1_size; c++) joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
-            
+            //reset cluster
             if (joint_model.cluster_size[a*max_sense_num+b]>0){
                 for (c=0;c<layer1_size;c++)
                     joint_model.mu[a*max_sense_num*layer1_size + b*layer1_size+c] /= joint_model.cluster_size[a*max_sense_num+b];
                 joint_model.cluster_size[a*max_sense_num+b] = 1;
+                //norm for NIL context center
+                len = 0;
+                for (c = 0; c < layer1_size; c++) len += joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c];
+                len = sqrt(len);
+                for (c = 0; c < layer1_size; c++) joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
             }
         }
     }
@@ -1925,7 +1969,7 @@ int main(int argc, char **argv) {
     
     //start training
     local_iter = 0;
-    if (save_iter <=0 || save_iter > iter) save_iter = 1;
+    if (save_iter <=0 || save_iter > iter) save_iter = iter;
     while(local_iter<iter){
         local_iter++;
         printf("Start jointly training the %d time... ", local_iter);

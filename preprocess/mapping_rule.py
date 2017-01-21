@@ -1,9 +1,10 @@
 import  codecs
 import regex as re
 import string
+from nltk.corpus import stopwords
 
 wiki_id_file = '/Volumes/cyx/document_rpi/wiki20160305wiki_title_cl'
-vocab_title = '/Volumes/cyx/document_rpi/wiki20160305vocab_title.txt'
+vocab_title = '/Volumes/cyx/document_rpi/wiki20160305/vocab_title.txt'
 map_file = '/Volumes/cyx/document_rpi/wiki20160305lower_map'
 count_file = '/Volumes/cyx/document_rpi/wiki20160305count_mentions'
 mapping_file = '/Volumes/cyx/document_rpi/wiki20160305mapping_pair'
@@ -13,6 +14,7 @@ titles = set()
 wiki_tilte = {}
 wiki_map = {}
 mentions = {}
+stop_words = set(stopwords.words('english'))
 
 punc = re.compile('[%s]' % re.escape(string.punctuation))
 
@@ -49,13 +51,13 @@ def loadMap(file):
 
 def rule(str):
     # possessive case 's
-    tmp_line = re.sub(r' s |\'s', ' ', str)
+    # tmp_line = re.sub(r' s |\'s', ' ', str)
     # following clean wiki xml, punctuation, numbers, and lower case
-    tmp_line = punc.sub(' ', tmp_line)
+    tmp_line = punc.sub(' ', str)
     tmp_line = tmp_line.replace('\t', ' ')
     tmp_line = re.sub(r'[\s]+', ' ', tmp_line)
     tmp_line = re.sub(r'(?<=\s)(\d+)(?=($|\s))', 'dddddd', tmp_line)
-    tmp_line = re.sub(r'(?<=^)(\d+)(?=($|\s))', 'dddddd', tmp_line).lower()
+    tmp_line = re.sub(r'(?<=^)(\d+)(?=($|\s))', 'dddddd', tmp_line).lower().strip()
     return tmp_line
 
 def loadCount(file):
@@ -76,8 +78,15 @@ def loadCount(file):
         sum_m += len(mentions[m])
     print 'successfully extract %d mentions! including %d titles!' % (len(mentions),sum_m)
 
-str = 'freedom, sauk county, wi'
-print rule(str)
+#only mapping title
+with codecs.open('./mapping_title', 'w', 'utf-8') as fout:
+    with codecs.open(vocab_title, 'r', 'utf-8') as fin:
+        for line in fin:
+            line = line.strip()
+            items = re.split(r'\t', line)
+            tmp_ment = rule(items[0])
+            if tmp_ment not in stop_words and len(tmp_ment) >2 and tmp_ment!='dddddd':
+                fout.write('%s\t%s\n' % (tmp_ment,items[0]))
 '''
 loadVocab(vocab_title)
 loadWikiTitle(wiki_id_file)

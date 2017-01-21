@@ -1472,11 +1472,13 @@ void TrainTextModel(){
     for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainTextModelThread, (void *)a);
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     
-    //norm
-    len = 0;
-    for (b = 0; b < layer1_size; b++) len += text_model.syn0[b + a * layer1_size] * text_model.syn0[b + a * layer1_size];
-    len = sqrt(len);
-    for (b = 0; b < layer1_size; b++) text_model.syn0[b + a * layer1_size] /= len;
+    //norm embedding of words and title, and reset the cluster
+    for (a=0;a<text_model.vocab_size;a++){
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += text_model.syn0[b + a * layer1_size] * text_model.syn0[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) text_model.syn0[b + a * layer1_size] /= len;
+    }
 }
 
 void TrainKgModel(){
@@ -1492,10 +1494,12 @@ void TrainKgModel(){
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     
     //norm
-    len = 0;
-    for (b = 0; b < layer1_size; b++) len += kg_model.syn0[b + a * layer1_size] * kg_model.syn0[b + a * layer1_size];
-    len = sqrt(len);
-    for (b = 0; b < layer1_size; b++) kg_model.syn0[b + a * layer1_size] /= len;
+    for (a=0;a<kg_model.vocab_size;a++){
+        len = 0;
+        for (b = 0; b < layer1_size; b++) len += kg_model.syn0[b + a * layer1_size] * kg_model.syn0[b + a * layer1_size];
+        len = sqrt(len);
+        for (b = 0; b < layer1_size; b++) kg_model.syn0[b + a * layer1_size] /= len;
+    }
 }
 
 void TrainJointModel() {
