@@ -670,7 +670,7 @@ void ReadTitleVocab() {
 }
 
 void ReadMappingTitle(){
-    long long a, i = 0, length=0, count = 0;
+    long long a, i = 0, count = 0;
     char title[MAX_STRING], map_title[MAX_STRING], c;
     unsigned int hash;
     
@@ -734,7 +734,6 @@ void initTitleVocab(){
 
 void InitTextNet() {
     long long a, b;
-    unsigned long long next_random = 1;
     a = posix_memalign((void **)&(text_model.syn0), 128, (long long)text_model.vocab_size * layer1_size * sizeof(real));
     if (text_model.syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
     if (negative>0) {
@@ -755,6 +754,8 @@ void InitTitleNet() {
     //title entity cluster
     a = posix_memalign((void **)&(joint_model.et_mu), 128, (long long)kg_model.vocab_size * layer1_size * sizeof(real));
     if (joint_model.et_mu == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    for (a = 0; a < kg_model.vocab_size; a++) for (b = 0; b < layer1_size; b++)
+        joint_model.et_mu[a * layer1_size + b] = 0;
     
     //title entity cluster size
     joint_model.et_cluster_size = (int *)calloc(kg_model.vocab_size, sizeof(int));
@@ -766,6 +767,8 @@ void InitTitleNet() {
     //sense cluster center
     a = posix_memalign((void **)&(joint_model.mu), 128, (long long)joint_model.vocab_size * max_sense_num * layer1_size * sizeof(real));
     if (joint_model.mu == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    for (a = 0; a < joint_model.vocab_size; a++) for (b = 0; b < layer1_size; b++)
+        joint_model.mu[a * layer1_size + b] = 0;
     
     //sense cluster size
     joint_model.cluster_size = (int *)calloc(joint_model.vocab_size * max_sense_num, sizeof(int));
@@ -789,7 +792,7 @@ void findMentionSense(struct anchor_item *anchor, real *vec, int title_index){
     for (a = 0; a < layer1_size; a++) len_v += vec[a] * vec[a];
     len_v = sqrt(len_v);
     for (a = 0; a < layer1_size; a++) vec[a] /= len_v;
-
+    
     //choose in entity sense
     for (a = 0; a < joint_model.vocab[title_index].entity_num; a++){
         tmp_entity_index = joint_model.vocab[title_index].entity_index[a];
@@ -812,7 +815,7 @@ void findMentionSense(struct anchor_item *anchor, real *vec, int title_index){
             et_closest = tmp_entity_index;
         }
     }
-
+    
     //choose in cluster sense
     for (a = 0; a < joint_model.vocab[title_index].sense_num; a++){
         c_size = joint_model.cluster_size[title_index*max_sense_num+a];
@@ -880,7 +883,7 @@ void *TrainTextModelThread(void *id) {
     long long word_count = 0, anchor_count = 0, anchor_position=0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
     long long l1, l2, c, target, label = 0;
     unsigned long long next_random = (long long)id;
-    int anchor_pos = -1, word_begin[MAX_MENTION], words_in_mention = 1, cw = 0;
+    int anchor_pos = -1, word_begin[MAX_MENTION], words_in_mention = 1, cw = 0, map_index = 0;
     char item[MAX_STRING], tmp_item[MAX_STRING], str_word[MAX_STRING];
     size_t tmp_item_len = 0;
     real f, g;
@@ -945,11 +948,11 @@ void *TrainTextModelThread(void *id) {
                     if (word == -1) continue;
                     if (word == 0) break;
                     // The subsampling randomly discards frequent words while keeping the ranking same
-//                    if (sample > 0) {
-//                        real ran = (sqrt(text_model.vocab[word].cn / (sample * text_model.train_items)) + 1) * (sample * text_model.train_items) / text_model.vocab[word].cn;
-//                        next_random = next_random * (unsigned long long)25214903917 + 11;
-//                        if (ran < (next_random & 0xFFFF) / (real)65536) continue;
-//                    }
+                    if (sample > 0) {
+                        real ran = (sqrt(text_model.vocab[word].cn / (sample * text_model.train_items)) + 1) * (sample * text_model.train_items) / text_model.vocab[word].cn;
+                        next_random = next_random * (unsigned long long)25214903917 + 11;
+                        if (ran < (next_random & 0xFFFF) / (real)65536) continue;
+                    }
                     sen[sentence_length] = word;
                     sentence_length++;
                     if (sentence_length >= MAX_SENTENCE_LENGTH) break;
@@ -970,9 +973,10 @@ void *TrainTextModelThread(void *id) {
                         else{
                             anchors[anchor_count].is_entity = 0;
                             strcpy(anchors[anchor_count].item, item);
+                            anchors[anchor_count].index = -1;
                         }
                         
-                        if(anchors[anchor_count].is_entity==1 && anchors[anchor_count].index!=-1 && kg_model.vocab[anchors[anchor_count].index].title_index != -1){
+                        if(anchors[anchor_count].is_entity == 0 || ( anchors[anchor_count].is_entity==1 && anchors[anchor_count].index!=-1 && kg_model.vocab[anchors[anchor_count].index].title_index != -1)){
                             anchor_count++;
                             if(anchor_count >= MAX_SENTENCE_LENGTH) anchor_count--;
                         }
@@ -1054,7 +1058,9 @@ void *TrainTextModelThread(void *id) {
                     if (cw <= 0) continue;
                     //choose sense
                     if (anchors[anchor_position].is_entity == 0){
-                        findMentionSense(&anchors[anchor_position], tmp_context_vec, SearchTitleVocab(anchors[anchor_position].item));
+                        map_index = SearchMapVocab(anchors[anchor_position].item);
+                        if (map_index != -1)
+                            findMentionSense(&anchors[anchor_position], tmp_context_vec, mapping_title.title_index[map_index]);
                         if(anchors[anchor_count].index == -1)
                             continue;
                     }
@@ -1170,7 +1176,7 @@ void TrainTextModel(){
                 for (c = 0; c < layer1_size; c++) len += joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] * joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c];
                 len = sqrt(len);
                 for (c = 0; c < layer1_size; c++) joint_model.et_mu[joint_model.vocab[a].entity_index[b] * layer1_size + c] /= len;
-            
+                
             }
         }
         //NIL cluster
@@ -1190,7 +1196,7 @@ void TrainTextModel(){
                 for (c = 0; c < layer1_size; c++) len += joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] * joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c];
                 len = sqrt(len);
                 for (c = 0; c < layer1_size; c++) joint_model.mu[a *max_sense_num* layer1_size + b * layer1_size + c] /= len;
-            
+                
             }
         }
     }
@@ -1339,8 +1345,10 @@ void LoadTitleVector(){
         printf("unmatched title vector max sense num!\n");
         return;
     }
-    
-    tmp_syn0 = (real *)calloc(layer_size, sizeof(real));
+    //count the num of loaded titles and entities
+    tmp_max_sense_num = 0;
+    layer_size = 0;
+    tmp_syn0 = (real *)calloc(layer1_size, sizeof(real));
     for (b = 0; b < vocab_size; b++) {
         a = 0;
         while (1) {
@@ -1353,23 +1361,28 @@ void LoadTitleVector(){
         title_index = SearchTitleVocab(tmp_title);
         fscanf(f, "%d%c%d%c", &sense_num, &d, &entity_num, &d);
         if (title_index!=-1){
+            tmp_max_sense_num ++;
             for (e = 0; e < sense_num; e++){
                 joint_model.vocab[title_index].sense_num ++;
-                for (c = 0; c < layer_size; c++) fread(&joint_model.syn0[c + e * layer_size + title_index * max_sense_num * layer_size], sizeof(float), 1, f);
+                for (c = 0; c < layer1_size; c++) fread(&joint_model.syn0[c + e * layer1_size + title_index * max_sense_num * layer1_size], sizeof(float), 1, f);
                 //norm
                 len = 0;
-                for (c = 0; c < layer_size; c++) len += joint_model.syn0[c + e * layer_size + title_index * max_sense_num * layer_size] * joint_model.syn0[c + e * layer_size + title_index * max_sense_num * layer_size];
+                for (c = 0; c < layer1_size; c++) len += joint_model.syn0[c + e * layer1_size + title_index * max_sense_num * layer1_size] * joint_model.syn0[c + e * layer1_size + title_index * max_sense_num * layer1_size];
                 len = sqrt(len);
-                for (c = 0; c < layer_size; c++) joint_model.syn0[c + e * layer_size + title_index * max_sense_num * layer_size] /= len;
+                for (c = 0; c < layer1_size; c++) joint_model.syn0[c + e * layer1_size + title_index * max_sense_num * layer1_size] /= len;
                 
-                for (c = 0; c < layer_size; c++) fread(&joint_model.mu[c + e * layer_size + title_index * max_sense_num * layer_size], sizeof(float), 1, f);
-                //norm
-                len = 0;
-                for (c = 0; c < layer_size; c++) len += joint_model.mu[c + e * layer_size + title_index * max_sense_num * layer_size] * joint_model.mu[c + e * layer_size + title_index * max_sense_num * layer_size];
-                len = sqrt(len);
-                for (c = 0; c < layer_size; c++) joint_model.mu[c + e * layer_size + title_index * max_sense_num * layer_size] /= len;
-                
-                joint_model.cluster_size[title_index * max_sense_num + e] = 1;
+                for (c = 0; c < layer1_size; c++) fread(&joint_model.mu[c + e * layer1_size + title_index * max_sense_num * layer1_size], sizeof(float), 1, f);
+                if(!isnan(joint_model.mu[e * layer1_size + title_index * max_sense_num * layer1_size])){
+                    //norm
+                    len = 0;
+                    for (c = 0; c < layer1_size; c++) len += joint_model.mu[c + e * layer1_size + title_index * max_sense_num * layer1_size] * joint_model.mu[c + e * layer1_size + title_index * max_sense_num * layer1_size];
+                    len = sqrt(len);
+                    for (c = 0; c < layer1_size; c++) joint_model.mu[c + e * layer1_size + title_index * max_sense_num * layer1_size] /= len;
+                    
+                    joint_model.cluster_size[title_index * max_sense_num + e] = 1;
+                }
+                else
+                    joint_model.cluster_size[title_index * max_sense_num + e] = 0;
             }
             fscanf(f, "%c", &d);
             // read title entity embedding
@@ -1383,25 +1396,30 @@ void LoadTitleVector(){
                 tmp_entity[a] = 0;
                 entity_index = SearchKgVocab(tmp_entity);
                 if (entity_index != -1){
-                    for (c = 0; c < layer_size; c++) fread(&joint_model.et_syn0[c + entity_index * layer_size], sizeof(float), 1, f);
+                    layer_size++;
+                    for (c = 0; c < layer1_size; c++) fread(&joint_model.et_syn0[c + entity_index * layer1_size], sizeof(float), 1, f);
                     //norm
                     len = 0;
-                    for (c = 0; c < layer_size; c++) len += joint_model.et_syn0[c + entity_index * layer_size] * joint_model.et_syn0[c + entity_index * layer_size];
+                    for (c = 0; c < layer1_size; c++) len += joint_model.et_syn0[c + entity_index * layer1_size] * joint_model.et_syn0[c + entity_index * layer1_size];
                     len = sqrt(len);
-                    for (c = 0; c < layer_size; c++) joint_model.et_syn0[c + entity_index * layer_size] /= len;
+                    for (c = 0; c < layer1_size; c++) joint_model.et_syn0[c + entity_index * layer1_size] /= len;
                     
-                    for (c = 0; c < layer_size; c++) fread(&joint_model.et_mu[c + entity_index * layer_size], sizeof(float), 1, f);
-                    //norm
-                    len = 0;
-                    for (c = 0; c < layer_size; c++) len += joint_model.et_mu[c + entity_index * layer_size] * joint_model.et_mu[c + entity_index * layer_size];
-                    len = sqrt(len);
-                    for (c = 0; c < layer_size; c++) joint_model.et_mu[c + entity_index * layer_size] /= len;
-                    
-                    joint_model.et_cluster_size[entity_index] = 1;
+                    for (c = 0; c < layer1_size; c++) fread(&joint_model.et_mu[c + entity_index * layer1_size], sizeof(float), 1, f);
+                    if(!isnan(joint_model.mu[e * layer1_size + title_index * max_sense_num * layer1_size])){
+                        //norm
+                        len = 0;
+                        for (c = 0; c < layer1_size; c++) len += joint_model.et_mu[c + entity_index * layer1_size] * joint_model.et_mu[c + entity_index * layer1_size];
+                        len = sqrt(len);
+                        for (c = 0; c < layer1_size; c++) joint_model.et_mu[c + entity_index * layer1_size] /= len;
+                        
+                        joint_model.et_cluster_size[entity_index] = 1;
+                    }
+                    else
+                        joint_model.et_cluster_size[entity_index] = 0;
                 }
                 else{
-                    for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
-                    for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                    for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                    for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
                 }
                 fscanf(f, "%c", &d);
             }
@@ -1409,8 +1427,8 @@ void LoadTitleVector(){
         else{
             //skip this title
             for (e = 0; e < sense_num; e++){
-                for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
-                for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
             }
             fscanf(f, "%c", &d);
             for (e = 0; e < entity_num; e++){
@@ -1421,13 +1439,14 @@ void LoadTitleVector(){
                     if ((a < MAX_STRING) && (tmp_entity[a] != '\n')) a++;
                 }
                 tmp_entity[a] = 0;
-                for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
-                for (c = 0; c < layer_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
+                for (c = 0; c < layer1_size; c++) fread(tmp_syn0, sizeof(float), 1, f);
                 fscanf(f, "%c", &d);
             }
         }
     }
     fclose(f);
+    printf("successfully load %d title with %d sense vectors!\n", tmp_max_sense_num, layer_size);
 }
 
 void InitTextModel(){

@@ -516,8 +516,8 @@ void GetItem(char *item){
 
 int main(int argc, char **argv) {
     char item[max_size];
-    int i, c, word_index = -1, title_index = -1, entity_index = -1;
-    long long a;
+    int i, c, word_index = -1, title_index = -1, entity_index = -1,sense_index=-1;
+    long long a,b;
     float word_vec[max_size], title_vec[max_size];
     int has_word = 0, has_entity = 0;
     if (argc < 2) {
@@ -612,6 +612,15 @@ int main(int argc, char **argv) {
             printf("\nEntity: %s  Position in vocabulary: %d\n", entities.vocab[entity_index].item, entity_index);
             for (a = 0; a < layer_size; a++) title_vec[a] += titles.et_vec[a + entity_index * layer_size];
             FindNearest(N, title_vec);
+
+            if(titles.vocab[title_index].sense_num>0){
+                printf("There are %d out of KB senses!\n",titles.vocab[title_index].sense_num);
+                for(b=0;b<titles.vocab[title_index].sense_num;b++){
+                    for (a = 0; a < layer_size; a++) title_vec[a] = 0;
+                    for (a = 0; a < layer_size; a++) title_vec[a] += titles.vec[a + b*layer_size+ title_index *max_sense_num * layer_size];
+                    FindNearest(N, title_vec);
+                }
+            }
         }
         
     }

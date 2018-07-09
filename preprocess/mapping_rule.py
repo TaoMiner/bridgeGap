@@ -3,12 +3,12 @@ import regex as re
 import string
 from nltk.corpus import stopwords
 
-wiki_id_file = '/Volumes/cyx/document_rpi/wiki20160305wiki_title_cl'
+wiki_id_file = '/Volumes/cyx/document_rpi/wiki20160305/wiki_title_cl'
 vocab_title = '/Volumes/cyx/document_rpi/wiki20160305/vocab_title.txt'
-map_file = '/Volumes/cyx/document_rpi/wiki20160305lower_map'
-count_file = '/Volumes/cyx/document_rpi/wiki20160305count_mentions'
-mapping_file = '/Volumes/cyx/document_rpi/wiki20160305mapping_pair'
-mention_list = '/Volumes/cyx/document_rpi/wiki20160305mention_list'
+map_file = '/Volumes/cyx/document_rpi/wiki20160305/lower_map'
+count_file = '/Volumes/cyx/document_rpi/wiki20160305/count_mentions'
+mapping_file = '/Volumes/cyx/document_rpi/wiki20160305/mapping_pair'
+mention_list = '/Volumes/cyx/document_rpi/wiki20160305/mention_list'
 
 titles = set()
 wiki_tilte = {}
